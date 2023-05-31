@@ -306,7 +306,7 @@ windowsExporterInstallerJob:
   concurrencyPolicy: Forbid            # Future cronjob will run only after current job is finished
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
-  ttlSecondsAfterFinished: 3600        # First job only (Not CronJob)   
+  ttlSecondsAfterFinished: 3600        # First job only (Not CronJob)
 
 kube-state-metrics:
   nodeSelector:

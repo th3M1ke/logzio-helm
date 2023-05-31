@@ -22,6 +22,7 @@ secrets:
   ListenerHost: ""
   env_id: "my_environment"
   LogzioRegion: "us"
+  LogzioTracingListener: ""
   p8s_logzio_name: ""
   windowsNodeUsername: ""
   windowsNodePassword: ""
@@ -203,6 +204,7 @@ tracesConfig:
   exporters:
     logzio:
       region: ${LOGZIO_LISTENER_REGION}
+      endpoint: ${LOGZIO_TRACING_LISTENER}
       account_token: ${TRACES_TOKEN}
     logging:
       loglevel: info
@@ -242,13 +244,13 @@ tracesConfig:
             {
               name: slow-traces-policy,
               type: latency,
-              latency: {threshold_ms: "${SAMPLING_LATENCY}" }            
+              latency: {threshold_ms: "${SAMPLING_LATENCY}" }
             },
             {
               name: probability-policy,
               type: probabilistic,
               probabilistic: {sampling_percentage: "${SAMPLING_PROBABILITY}" }
-            }       
+            }
         ]
   service:
     extensions:
@@ -262,7 +264,7 @@ tracesConfig:
         exporters: [logging, logzio]
     telemetry:
       logs:
-        level: "info"  
+        level: "info"
 
 spmForwarderConfig:
   exporters:
@@ -411,7 +413,7 @@ metricsConfig:
           - role: node
           relabel_configs:
           - action: labelmap
-            regex: __meta_kubernetes_node_label_(.+)  
+            regex: __meta_kubernetes_node_label_(.+)
           metric_relabel_configs: []
 
   service:
@@ -426,7 +428,7 @@ metricsConfig:
           - filter/kubernetes360
         receivers:
           - prometheus
-          
+
 # Shared params for agentCollector daemonset and standaloneCollector deployment pods.
 # Can be overridden here or for any component independently using the same keys.
 
@@ -531,7 +533,7 @@ spanMetricsAgregator:
           - name: env_id
             default: ${ENV_ID}
     receivers:
-      # Dummy recivier 
+      # Dummy recivier
       otlp/spm:
         protocols:
           grpc:
@@ -577,13 +579,13 @@ spanMetricsAgregator:
           processors: [spanmetrics]
           exporters: [logging]
         metrics/spm:
-          # Dummy recivier 
+          # Dummy recivier
           receivers: [otlp/spm ]
           exporters: [logging, prometheus/spm]
         metrics/spm-logzio:
           receivers: [prometheus/spm-logzio]
           exporters: [prometheusremotewrite/spm-logzio]
-  # service values        
+  # service values
   service:
     type: ClusterIP
     annotations: {}
@@ -664,7 +666,7 @@ daemonsetCollector:
 
   containerLogs:
     enabled: false
-  
+
   # prevent collector daemonset deployment on fargate nodes
   affinity:
     nodeAffinity:
@@ -700,9 +702,9 @@ windowsExporterInstallerJob:
   concurrencyPolicy: Forbid            # Future cronjob will run only after current job is finished
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
-  ttlSecondsAfterFinished: 3600        # First job only (Not CronJob)   
+  ttlSecondsAfterFinished: 3600        # First job only (Not CronJob)
 
-# /*Otel traces additions*/ 
+# /*Otel traces additions*/
 
 podMonitor:
   enabled: false
@@ -853,7 +855,7 @@ daemonsetConfig:
               target_label: kubernetes_node
             - source_labels: [__meta_kubernetes_service_annotation_logz_io_app]
               action: replace
-              target_label: logzio_app                 
+              target_label: logzio_app
           metric_relabel_configs: []
         - job_name: applications
           honor_timestamps: true
@@ -896,7 +898,7 @@ daemonsetConfig:
               target_label: pod
             - source_labels: [__meta_kubernetes_pod_node_name]
               action: replace
-              target_label: kubernetes_node          
+              target_label: kubernetes_node
           metric_relabel_configs: []
         - job_name: 'kubernetes-cadvisor'
           scheme: https
@@ -913,7 +915,7 @@ daemonsetConfig:
               field: "metadata.name=$KUBE_NODE_NAME"
           relabel_configs:
           - action: labelmap
-            regex: __meta_kubernetes_node_label_(.+)  
+            regex: __meta_kubernetes_node_label_(.+)
           metric_relabel_configs: []
 
   service:
@@ -928,15 +930,15 @@ daemonsetConfig:
           - filter/kubernetes360
         receivers:
           - prometheus
-          
+
 opencost:
   enabled: false
   config:
     processors:
     # opencost collects duplicates metrics from kube-state and cadvisor.
-      filter/opencost-exporter: 
+      filter/opencost-exporter:
         metrics:
-          datapoint:     
+          datapoint:
             - 'IsMatch(metric.name, "(${OPENCOST_DUPLICATES})") == true and attributes["app"] == "opencost"'
     service:
       pipelines:

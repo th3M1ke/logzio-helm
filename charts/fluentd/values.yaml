@@ -526,7 +526,7 @@ configmap:
           env_id "#{ENV['ENV_ID']}"
         </record>
       </filter>
-  
+
   prometheus: |
     <source>
       @type prometheus
@@ -555,6 +555,6 @@ configmap:
       @type prometheus_output_monitor
       @id in_prometheus_output_monitor
     </source>
-    
+
   customSources: ""
   customFilters: ""
