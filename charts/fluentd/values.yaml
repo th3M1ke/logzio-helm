@@ -130,7 +130,7 @@ secrets:
   logzioShippingToken: ""
   logzioListener: ""
 
-secretName: logzio-logs-secret
+secretName: logzio-logs-secret-cltr
 
 configMapIncludes: |
   @include "#{ENV['FLUENTD_SYSTEMD_CONF'] || 'systemd'}.conf"

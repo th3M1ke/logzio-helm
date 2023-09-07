@@ -35,17 +35,17 @@ spec:
         - name: LOGZIO_LOGS_SHIPPING_TOKEN
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-shipping-token
         - name: LOGZIO_LOGS_LISTENER_HOST
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-listener
         - name: CLUSTER_NAME
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: cluster-name
         - name: IGNORE_OLDER
           value: {{ .Values.daemonset.ignoreOlder }}
@@ -130,17 +130,17 @@ spec:
         - name: LOGZIO_LOGS_SHIPPING_TOKEN
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-shipping-token
         - name: LOGZIO_LOGS_LISTENER_HOST
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-listener
         - name: CLUSTER_NAME
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: cluster-name
         - name: IGNORE_OLDER
           value: {{ .Values.winlogbeatDaemonset.ignoreOlder }}
@@ -218,17 +218,17 @@ spec:
         - name: LOGZIO_LOGS_SHIPPING_TOKEN
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-shipping-token
         - name: LOGZIO_LOGS_LISTENER_HOST
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: logzio-logs-listener
         - name: CLUSTER_NAME
           valueFrom:
             secretKeyRef:
-              name: logzio-logs-secret
+              name: logzio-logs-secret-cltr
               key: cluster-name
         - name: IGNORE_OLDER
           value: {{ .Values.filebeatWindowsDaemonset.ignoreOlder }}
