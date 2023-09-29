@@ -107,6 +107,7 @@ helm install -n monitoring \
 | `daemonset.terminationGracePeriodSeconds` | Termination period (in seconds) to wait before killing Fluentd pod process on pod shutdown. | `30` |
 | `daemonset.extraVolumes` | If needed, more volumes can be added with this field. | `[]` |
 | `daemonset.init.extraVolumeMounts` | If needed, more volume mounts to the init container can be added with this field. | `[]` |
+| `daemonset.init.containerImage` | Init container image for the fluentd daemonset. | `busybox` |
 | `daemonset.priorityClassName` | Set [priorityClassName](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/) for all DaemonSet pods. | `""` |
 | `windowsDaemonset.kubernetesVerifySsl` | Enables to validate SSL certificates (windows). | `true` |
 | `windowsDaemonset.auditLogFormat` | Match Fluentd's format for kube-apiserver audit logs. Set to `audit-json` if your audit logs are in json format. (windows) | `audit` |
@@ -134,6 +135,7 @@ helm install -n monitoring \
 | `clusterRole.rules` | Configurable [cluster role rules](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#role-and-clusterrole) that Fluentd uses to access Kubernetes resources. | See [values.yaml](https://github.com/logzio/logzio-helm/blob/master/charts/fluentd/values.yaml). |
 | `secrets.logzioShippingToken` | Secret with your [logzio shipping token](https://app.logz.io/#/dashboard/settings/general). | `""` |
 | `secrets.logzioListener` | Secret with your logzio listener host. `listener.logz.io`. | `" "` |
+| `secrets.customEndpoint` | Secret with your custom endpoint, for example:`http://endpoint:8080`. Overrides `secrets.logzioListener` | `""` |
 | `secrets.enabled` | When `true`, the logzio secret will be created and managed by this Chart. If you're managing the logzio secret by yourself, set to `false`. | `true` |
 | `secretName` | Name of the secret in case it's placed from an external source. | `logzio-logs-secret` |
 | `configMapIncludes` | Initial includes for `fluent.conf`. | See [values.yaml](https://github.com/logzio/logzio-helm/blob/master/charts/fluentd/values.yaml). |
@@ -150,6 +152,8 @@ helm install -n monitoring \
 | `configmap.envId` | Config snippet for adding `env_id` field to logs | See [values.yaml](https://github.com/logzio/logzio-helm/blob/master/charts/fluentd/values.yaml). |
 | `configmap.customSources` | Add sources to the Fluentd configuration | `""` |
 | `configmap.customFilters` | Add filters to the Fluentd configuration | `""` |
+| `configmap.customFilterAfter` | Add filters to the Fluentd configuration, after default filters | `""` |
+| `logLevelFilter` | Add log level filter. Regex of the log level(s) you want to ship. For example, if you want to ship warning and error logs, use `WARNING\|ERROR`. Possible levels are: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `TRACE`. | `""` |
 
 **Note:** If you're adding your own configuration file via `configmap.extraConfig`:
 - Add a `--set-file` flag to your `helm install` command, as seen in the [example above](https://github.com/logzio/logzio-helm/tree/master/charts/fluentd#configuration).
@@ -174,6 +178,11 @@ In these cases we can use the following `--set` command to use an alternative im
 ```shell
 --set image=public.ecr.aws/logzio/logzio-fluentd
 ```
+
+```shell
+--set daemonset.init.containerImage=public.ecr.aws/docker/library/busybox
+```
+
 
 ### Adding a custom log_type field from attribute
 To add a `log_type` field with a custom value to each log, you can use the annotation key `log_type` with a custom value. The annotation will be automatically parsed into a `log_type` field with the provided value.
@@ -273,8 +282,38 @@ enable prometheus configuration with the `daemonset.fluentdPrometheusConf` and `
 When enabling promehteus configuration, the pod collects and exposes fluentd metrics on port `24231`, `/metrics` endpoint. The templates contains annotations to easly ship when using promehteus shipper or `logzio-telemetry` chart. Monitoring Windows fluentd is not supported.
 
 
+## Fluentd images for windows server
+By default the fluentd image for windows-server supports windows server 2019.
+If needed, the fluentd image can be changed to support windows server 2022 with the following commands:
+
+```yaml
+--set windowsImage=logzio/fluentd-windows-2022 \
+--set windowsImageTag=0.0.1
+```
+
 
 ## Change log
+
+ - **0.24.0**:
+   - Add parameter `configmap.customFilterAfter` that allows adding filters AFTER built-in filter configuration.
+   - Added `daemonset.init.containerImage` customization.
+   - Added fluentd image for windows server 2022.
+ - **0.23.0**:
+   - Allow filtering logs by log level with `logLevelFilter`.
+ - **0.22.0**:
+   - Add custom endpoint option with `secrets.customEndpoint`.
+
+<details>
+  <summary markdown="span"> Expand to check old versions </summary>
+
+ - **0.21.0**:
+  - Bump docker image to `1.5.0`:
+    - Upgrade fluentd to `1.16`.
+    - Upgrade gem `fluent-plugin-logzio` to `0.2.2`:
+      - Do not retry on 400 and 401. For 400 - try to fix log and resend.
+      - Generate a metric (`logzio_status_codes`) for response codes from Logz.io.
+ - **0.20.3**:
+   - ezKonnect support: Added `logz.io/application_type` to type annotation check .
  - **0.20.2**:
    - Upgrade docker image `logzio/logzio-fluentd` to `1.4.0`:
      - Use fluentd's retry instead of retry in code (raise exception on non-2xx response).
@@ -286,11 +325,6 @@ When enabling promehteus configuration, the pod collects and exposes fluentd met
      - Added prometheus monitor plugin
      - Added dedot plugin
    - Updated `windowsDaemonset.fluentdPrometheusConf` - now controls prometheus config for collecting and exposing fluentd metrics.
-
-
-<details>
-  <summary markdown="span"> Expand to check old versions </summary>
-
  - **0.19.0**:
    - Upgraded image to `logzio/logzio-fluentd:1.3.1`:
      - Added prometheus monitor plugin

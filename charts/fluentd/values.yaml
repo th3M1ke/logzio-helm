@@ -1,5 +1,5 @@
 image: logzio/logzio-fluentd
-imageTag: 1.4.0
+imageTag: 1.5.0
 
 windowsImage: logzio/fluentd-windows
 windowsImageTag: 0.0.2
@@ -73,6 +73,7 @@ daemonset:
   terminationGracePeriodSeconds: 30
   extraVolumes: []
   init:
+    containerImage: "busybox"
     extraVolumeMounts: []
   priorityClassName: ""
 
@@ -129,6 +130,7 @@ secrets:
   enabled: true
   logzioShippingToken: ""
   logzioListener: ""
+  customEndpoint: ""
 
 secretName: logzio-logs-secret-cltr
 
@@ -384,7 +386,7 @@ configmap:
       @id filter_kube_metadata
       kubernetes_url "#{ENV['FLUENT_FILTER_KUBERNETES_URL'] || 'https://' + ENV.fetch('KUBERNETES_SERVICE_HOST') + ':' + ENV.fetch('KUBERNETES_SERVICE_PORT') + '/api'}"
       verify_ssl "#{ENV['KUBERNETES_VERIFY_SSL'] || true}"
-      annotation_match "log\_type"
+      annotation_match "log\_type|logz\.io\/application\_type"
     </filter>
     <filter **>
       @type record_modifier
@@ -394,7 +396,7 @@ configmap:
         # sort log level keywords and use info as default
         log_level ${if record.dig("dummy_level") =~ /^(?i)(error|failure|failed|exception|panic)$/ then "ERROR"; elsif record.dig("dummy_level")=~ /^(?i)(warn|warning)$/ then "WARNING" ; elsif record.dig("dummy_level") != "" then record.dig("dummy_level").upcase; else "INFO" end;}
         # insert log_type from annotation (if exists)
-        type ${record.dig("kubernetes","annotations","log_type") || record.dig("type")}
+        type ${record.dig("kubernetes","annotations","log_type") || record.dig("kubernetes","annotations","logz.io/application_type") || record.dig("type")}
         _dummy_ ${if record.dig("kubernetes","annotations","log_type") then record["kubernetes"]["annotations"].delete("log_type"); end;}
       </record>
       remove_keys _dummy_,dummy_level
@@ -405,6 +407,10 @@ configmap:
       de_dot_separator  _
       de_dot_nested     true
     </filter>
+
+    @include log-level-filter.conf
+
+    @include custom-filters-after.conf
 
   system: |
     <system>
@@ -558,3 +564,6 @@ configmap:
 
   customSources: ""
   customFilters: ""
+  customFilterAfter: ""
+logLevelFilter: ""
+

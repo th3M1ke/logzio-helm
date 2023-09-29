@@ -33,7 +33,9 @@ Create the name of the service account to use
 Builds the full logzio listener host
 */}}
 {{- define "logzio.listenerHost" }}
-{{- if or ( eq $.Values.secrets.logzioListener "listener.logz.io" ) ( eq $.Values.secrets.logzioListener " " ) -}}
+{{- if ne $.Values.secrets.customEndpoint "" -}}
+{{- printf "%s" .Values.secrets.customEndpoint  }}
+{{- else if or ( eq $.Values.secrets.logzioListener "listener.logz.io" ) ( eq $.Values.secrets.logzioListener " " ) -}}
 {{- printf "https://listener.logz.io:8071" }}
 {{- else }}
 {{- printf "%s" .Values.secrets.logzioListener -}}
@@ -73,5 +75,15 @@ Builds the list for exclude paths in the tail for the containers - windows
 {{- cat .Values.windowsDaemonset.excludeFluentdPath "," .Values.windowsDaemonset.extraExclude | nospace }}
 {{- else }}
 {{- print .Values.windowsDaemonset.excludeFluentdPath }}
+{{- end -}}
+{{- end -}}
+
+
+{{/*
+Builds a filter based on log levels
+*/}}
+{{- define "logzio.logLevelFilter" }}
+{{- if .Values.logLevelFilter }}
+{{- cat "<filter **>\n    @type grep\n    regexp1 log_level" .Values.logLevelFilter "\n</filter>" | replace "\"" "" }}
 {{- end -}}
 {{- end -}}

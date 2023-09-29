@@ -10,7 +10,8 @@ metrics:
   enabled: false
 spm:
   enabled: false
-
+applicationMetrics:
+  enabled: false
 nameOverride: "otel-collector"
 fullnameOverride: ""
 
@@ -22,7 +23,7 @@ secrets:
   ListenerHost: ""
   env_id: "my_environment"
   LogzioRegion: "us"
-  LogzioTracingListener: ""
+  CustomTracingEndpoint: ""
   p8s_logzio_name: ""
   windowsNodeUsername: ""
   windowsNodePassword: ""
@@ -155,6 +156,11 @@ baseCollectorConfig:
         - k8s.deployment.name
         - k8s.namespace.name
         - k8s.node.name
+        - k8s.statefulset.name
+        - k8s.replicaset.name
+        - k8s.daemonset.name
+        - k8s.cronjob.name
+        - k8s.job.name
     resource/k8s:
       attributes:
       # Rename
@@ -164,15 +170,30 @@ baseCollectorConfig:
       - key: kubernetes_node
         action: insert
         from_attribute: k8s.node.name
-      - key: namespace
+      - key: kubernetes_namespace
         action: insert
         from_attribute: k8s.namespace.name
-      - key: deployment
+      - key: kubernetes_deployment
         action: insert
         from_attribute: k8s.deployment.name
-      - key: pod_ip
+      - key: kubernetes_pod_ip
         action: insert
         from_attribute: k8s.pod.ip
+      - key: kubernetes_statefulset
+        action: insert
+        from_attribute: k8s.statefulset.name
+      - key: kubernetes_replicaset
+        action: insert
+        from_attribute: k8s.replicaset.name
+      - key: kubernetes_cronjob
+        action: insert
+        from_attribute: k8s.cronjob.name
+      - key: kubernetes_daemonset
+        action: insert
+        from_attribute: k8s.daemonset.name
+      - key: kubernetes_job
+        action: insert
+        from_attribute: k8s.job.name
       # Delete old
       - key: k8s.deployment.name
         action: delete
@@ -183,6 +204,16 @@ baseCollectorConfig:
       - key: k8s.node.name
         action: delete
       - key: k8s.pod.ip
+        action: delete
+      - key: k8s.statefulset.name
+        action: delete
+      - key: k8s.replicaset.name
+        action: delete
+      - key: k8s.daemonset.name
+        action: delete
+      - key: k8s.job.name
+        action: delete
+      - key: k8s.cronjob.name
         action: delete
     batch: {}
     attributes/env_id:
@@ -203,6 +234,7 @@ baseCollectorConfig:
 tracesConfig:
   exporters:
     logzio:
+      endpoint: ${CUSTOM_TRACING_ENDPOINT}
       region: ${LOGZIO_LISTENER_REGION}
       endpoint: ${LOGZIO_TRACING_LISTENER}
       account_token: ${TRACES_TOKEN}
@@ -233,6 +265,8 @@ tracesConfig:
     zipkin:
       endpoint: "0.0.0.0:9411"
   processors:
+    resourcedetection/all:
+      detectors: [ec2, azure, gcp]
     tail_sampling:
       policies:
         [
@@ -260,8 +294,8 @@ tracesConfig:
     pipelines:
       traces:
         receivers: [jaeger, zipkin, otlp]
-        processors: [attributes/env_id, k8sattributes, resource/k8s, tail_sampling, batch]
-        exporters: [logging, logzio]
+        processors: [resourcedetection/all,attributes/env_id, k8sattributes, resource/k8s, tail_sampling, batch]
+        exporters: [logzio]
     telemetry:
       logs:
         level: "info"
@@ -276,7 +310,7 @@ spmForwarderConfig:
     pipelines:
       traces/spm:
         receivers: [jaeger, zipkin, otlp]
-        processors: [attributes/env_id, k8sattributes, batch]
+        processors: [resourcedetection/all, attributes/env_id, k8sattributes]
         exporters: [logging, otlp]
 
 metricsConfig:
@@ -288,7 +322,14 @@ metricsConfig:
         datapoint:
           - 'IsMatch(metric.name, "(${K8S_360_METRICS})") == true and attributes["logzio_app"] != "kubernetes360"'
   exporters:
-    prometheusremotewrite:
+    prometheusremotewrite/applications:
+      timeout: 30s
+      endpoint: ${LISTENER_URL}
+      external_labels:
+        p8s_logzio_name: ${P8S_LOGZIO_NAME}
+      headers:
+        Authorization: "Bearer ${METRICS_TOKEN}"
+    prometheusremotewrite/infrastructure:
       timeout: 30s
       endpoint: ${LISTENER_URL}
       external_labels:
@@ -296,17 +337,87 @@ metricsConfig:
       headers:
         Authorization: "Bearer ${METRICS_TOKEN}"
   receivers:
-    prometheus:
+    prometheus/applications:
       config:
         global:
           scrape_interval: 60s
           scrape_timeout: 60s
         scrape_configs:
+        - job_name: applications
+          honor_timestamps: true
+          honor_labels: true
+          metrics_path: /metrics
+          scheme: http
+          kubernetes_sd_configs:
+          - role: pod
+          relabel_configs:
+            - action: keep
+              regex: true|"true"
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            - action: replace
+              regex: (https?)
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+              target_label: __scheme__
+            - action: replace
+              regex: (.+)
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+              target_label: __metrics_path__
+            - action: replace
+              regex: (.+?)(?::\d+)?;(\d+)
+              replacement: $$1:$$2
+              source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+              target_label: __address__
+            - action: labelmap
+              regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
+              replacement: __param_$$1
+            - action: labelmap
+              regex: __meta_kubernetes_pod_label_(.+)
+            - action: replace
+              source_labels: [__meta_kubernetes_namespace]
+              target_label: namespace
+            - action: replace
+              source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod
+            - source_labels: [__meta_kubernetes_pod_node_name]
+              action: replace
+              target_label: kubernetes_node
+          metric_relabel_configs: []
+    prometheus/cadvisor:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
+        - job_name: 'kubernetes-cadvisor'
+          scheme: https
+          metrics_path: /metrics/cadvisor
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            insecure_skip_verify: true
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          kubernetes_sd_configs:
+          - role: node
+          relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          metric_relabel_configs: []
+    prometheus/collector:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
         # Job to collect opentelemetry collector metrics
         - job_name: 'collector-metrics'
-          scrape_interval: 30s
+          scrape_interval: 15s
           static_configs:
           - targets: [ "0.0.0.0:8888" ]
+    prometheus/infrastructure:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
         - job_name: windows-metrics
           honor_timestamps: true
           honor_labels: true
@@ -361,75 +472,22 @@ metricsConfig:
               action: replace
               target_label: logzio_app
           metric_relabel_configs: []
-
-        # Job to collect metrics from applications running on pods
-        - job_name: applications
-          honor_timestamps: true
-          honor_labels: true
-          metrics_path: /metrics
-          scheme: http
-          kubernetes_sd_configs:
-          - role: pod
-          relabel_configs:
-            - action: keep
-              regex: true|"true"
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-            - action: replace
-              regex: (https?)
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
-              target_label: __scheme__
-            - action: replace
-              regex: (.+)
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-              target_label: __metrics_path__
-            - action: replace
-              regex: (.+?)(?::\d+)?;(\d+)
-              replacement: $$1:$$2
-              source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-              target_label: __address__
-            - action: labelmap
-              regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
-              replacement: __param_$$1
-            - action: labelmap
-              regex: __meta_kubernetes_pod_label_(.+)
-            - action: replace
-              source_labels: [__meta_kubernetes_namespace]
-              target_label: namespace
-            - action: replace
-              source_labels: [__meta_kubernetes_pod_name]
-              target_label: pod
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              action: replace
-              target_label: kubernetes_node
-          metric_relabel_configs: []
-        - job_name: 'kubernetes-cadvisor'
-          scheme: https
-          metrics_path: /metrics/cadvisor
-          tls_config:
-            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-            insecure_skip_verify: true
-          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-          kubernetes_sd_configs:
-          - role: node
-          relabel_configs:
-          - action: labelmap
-            regex: __meta_kubernetes_node_label_(.+)
-          metric_relabel_configs: []
-
   service:
     extensions:
       - health_check
     pipelines:
-      metrics:
+      metrics/infrastructure:
         exporters:
-          - prometheusremotewrite
+          - prometheusremotewrite/infrastructure
         processors:
           - attributes/env_id
           - filter/kubernetes360
         receivers:
-          - prometheus
+          - prometheus/infrastructure
+          - prometheus/cadvisor
+          - prometheus/collector
 
-# Shared params for agentCollector daemonset and standaloneCollector deployment pods.
+# Shared params for daemonsetCollector and standaloneCollector deployment pods.
 # Can be overridden here or for any component independently using the same keys.
 
 image:
@@ -437,7 +495,7 @@ image:
   repository: otel/opentelemetry-collector-contrib
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.70.0"
+  tag: "0.78.0"
 nginxWindowsImage:
   # Reverse proxy image to enable metrics scraping from windows nodes
   repository: logzio/logzio-windows-node-reverse-proxy
@@ -448,12 +506,16 @@ windowsExporterInstallerImage:
   repository: logzio/logzio-windows-exporter-installer
   pullPolicy: IfNotPresent
   tag: "0.0.1"
+spmImage:
+  repository: otel/opentelemetry-collector-contrib
+  pullPolicy: IfNotPresent
+  tag: "0.73.0"
 imagePullSecrets: []
 
 # OpenTelemetry Collector executable
 command:
   name: otelcol-contrib
-  extraArgs: []
+  extraArgs:
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -480,8 +542,8 @@ extraEnvs: []
 extraHostPathMounts: []
 secretMounts: []
 
-# Configuration for ports, shared between agentCollector, standaloneCollector and service.
-# Can be overridden here or for agentCollector and standaloneCollector independently.
+# Configuration for ports, shared between daemonsetCollector, standaloneCollector and service.
+# Can be overridden here or for daemonsetCollector and standaloneCollector independently.
 ports:
   otlp:
     enabled: true
@@ -530,6 +592,18 @@ spanMetricsAgregator:
         aggregation_temporality: AGGREGATION_TEMPORALITY_CUMULATIVE
         dimensions:
           - name: http.method
+          - name: http.status_code
+          - name: k8s.pod.name
+          - name: k8s.deployment.name
+          - name: k8s.namespace.name
+          - name: k8s.node.name
+          - name: k8s.statefulset.name
+          - name: k8s.replicaset.name
+          - name: k8s.daemonset.name
+          - name: k8s.cronjob.name
+          - name: k8s.job.name
+          - name: cloud.provider
+          - name: cloud.region
           - name: env_id
             default: ${ENV_ID}
     receivers:
@@ -564,7 +638,8 @@ spanMetricsAgregator:
       zipkin:
         endpoint: "0.0.0.0:9411"
     exporters:
-      logging: {}
+      logging:
+        loglevel: info
       prometheus/spm:
         endpoint: "0.0.0.0:8889"
       prometheusremotewrite/spm-logzio:
@@ -580,8 +655,8 @@ spanMetricsAgregator:
           exporters: [logging]
         metrics/spm:
           # Dummy recivier
-          receivers: [otlp/spm ]
-          exporters: [logging, prometheus/spm]
+          receivers: [otlp/spm]
+          exporters: [prometheus/spm]
         metrics/spm-logzio:
           receivers: [prometheus/spm-logzio]
           exporters: [prometheusremotewrite/spm-logzio]
@@ -631,20 +706,7 @@ spanMetricsAgregator:
       cpu: 256m
       memory: 512Mi
 
-# Configuration for agent OpenTelemetry Collector daemonset, disabled by default
-agentCollector:
-  enabled: false
 
-  containerLogs:
-    enabled: false
-
-  resources:
-    limits:
-      cpu: 256m
-      memory: 512Mi
-  podAnnotations: {}
-  # Configuration override that will be merged into the agent's default config
-  configOverride: {}
 # Configuration for standalone OpenTelemetry Collector deployment, enabled by default
 standaloneCollector:
   enabled: false
@@ -654,11 +716,12 @@ standaloneCollector:
 
   resources:
     limits:
-      cpu: 512m
-      memory: 1024Mi
+      memory: 512Mi
+    requests:
+      cpu: 200m
 
   podAnnotations: {}
-  # Configuration override that will be merged into the agent's default config
+  # Configuration override that will be merged into the colelctor default config
   configOverride: {}
 
 daemonsetCollector:
@@ -678,11 +741,12 @@ daemonsetCollector:
 
   resources:
     limits:
-      cpu: 512m
-      memory: 1024Mi
+      memory: 250Mi
+    requests:
+      cpu: 150m
 
   podAnnotations: {}
-  # Configuration override that will be merged into the agent's default config
+  # Configuration override that will be merged into the daemonset default config
   configOverride: {}
 
 service:
@@ -704,24 +768,6 @@ windowsExporterInstallerJob:
   failedJobsHistoryLimit: 1
   ttlSecondsAfterFinished: 3600        # First job only (Not CronJob)
 
-# /*Otel traces additions*/
-
-podMonitor:
-  enabled: false
-  metricsEndpoints: {}
-  # - port: prometheus
-  # additional labels for the PodMonitor
-  extraLabels: {}
-  #   release: kube-prometheus-stack
-serviceMonitor:
-  enabled: false
-  metricsEndpoints: {}
-  # - port: metrics
-  #   interval: 15s
-  # additional labels for the ServiceMonitor
-  extraLabels: {}
-  #  release: kube-prometheus-stack
-
 podLabels:  {}
 annotations:  {}
 
@@ -733,6 +779,7 @@ kube-state-metrics:
     kubernetes.io/os: linux
   podSecurityPolicy:
     enabled: false
+  extraArgs: ["--metric-labels-allowlist=nodes=[kubernetes.azure.com/scalesetpriority,eks.amazonaws.com/capacityType,cloud.google.com/gke-preemptible]"]
 
 prometheus-node-exporter:
   service:
@@ -758,7 +805,7 @@ enableMetricsFilter:
   gke: false
   eks: false
   aks: false
-  kubeSystem: false
+  dropKubeSystem: false
 
 disableKubeDnsScraping: false
 
@@ -766,16 +813,22 @@ daemonsetConfig:
   extensions:
     health_check: {}
   processors:
+    resourcedetection/all:
+      detectors: [ec2, azure, gcp]
     filter/kubernetes360:
       metrics:
         datapoint:
           - 'IsMatch(metric.name, "(${K8S_360_METRICS})") == true and attributes["logzio_app"] != "kubernetes360"'
           - 'IsMatch(metric.name, "(${K8S_360_METRICS})") == true and IsMatch(attributes["kubernetes_node"], "(.+)") == false'
-    filter/endpoints:
-      metrics:
-        datapoint:
   exporters:
-    prometheusremotewrite:
+    prometheusremotewrite/applications:
+      timeout: 30s
+      endpoint: ${LISTENER_URL}
+      external_labels:
+        p8s_logzio_name: ${P8S_LOGZIO_NAME}
+      headers:
+        Authorization: "Bearer ${METRICS_TOKEN}"
+    prometheusremotewrite/infrastructure:
       timeout: 30s
       endpoint: ${LISTENER_URL}
       external_labels:
@@ -783,7 +836,79 @@ daemonsetConfig:
       headers:
         Authorization: "Bearer ${METRICS_TOKEN}"
   receivers:
-    prometheus:
+    prometheus/applications:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
+        - job_name: applications
+          honor_timestamps: true
+          honor_labels: true
+          metrics_path: /metrics
+          scheme: http
+          kubernetes_sd_configs:
+          - role: pod
+            selectors:
+            # only scrape data from pods running on the same node as the collector
+            - role: pod
+              field: "spec.nodeName=$KUBE_NODE_NAME"
+          relabel_configs:
+            - action: keep
+              regex: true|"true"
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            - action: replace
+              regex: (https?)
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+              target_label: __scheme__
+            - action: replace
+              regex: (.+)
+              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+              target_label: __metrics_path__
+            - action: replace
+              regex: (.+?)(?::\d+)?;(\d+)
+              replacement: $$1:$$2
+              source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+              target_label: __address__
+            - action: labelmap
+              regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
+              replacement: __param_$$1
+            - action: labelmap
+              regex: __meta_kubernetes_pod_label_(.+)
+            - action: replace
+              source_labels: [__meta_kubernetes_namespace]
+              target_label: namespace
+            - action: replace
+              source_labels: [__meta_kubernetes_pod_name]
+              target_label: pod
+            - source_labels: [__meta_kubernetes_pod_node_name]
+              action: replace
+              target_label: kubernetes_node
+          metric_relabel_configs: []
+    prometheus/cadvisor:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
+        - job_name: 'kubernetes-cadvisor'
+          scheme: https
+          metrics_path: /metrics/cadvisor
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            insecure_skip_verify: true
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          kubernetes_sd_configs:
+          - role: node
+            selectors:
+            # only scrape data from node with the same name as the node the collector run on
+            - role: node
+              field: "metadata.name=$KUBE_NODE_NAME"
+          relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          metric_relabel_configs: []
+    prometheus/collector:
       config:
         global:
           scrape_interval: 30s
@@ -791,9 +916,16 @@ daemonsetConfig:
         scrape_configs:
         # Job to collect opentelemetry collector metrics
         - job_name: 'collector-metrics'
-          scrape_interval: 30s
+          scrape_interval: 15s
           static_configs:
           - targets: [ "0.0.0.0:8888" ]
+          metric_relabel_configs: []
+    prometheus/infrastructure:
+      config:
+        global:
+          scrape_interval: 30s
+          scrape_timeout: 30s
+        scrape_configs:
         - job_name: windows-metrics
           honor_timestamps: true
           honor_labels: true
@@ -857,79 +989,20 @@ daemonsetConfig:
               action: replace
               target_label: logzio_app
           metric_relabel_configs: []
-        - job_name: applications
-          honor_timestamps: true
-          honor_labels: true
-          metrics_path: /metrics
-          scheme: http
-          kubernetes_sd_configs:
-          - role: pod
-            selectors:
-            # only scrape data from pods running on the same node as collector
-            - role: pod
-              field: "spec.nodeName=$KUBE_NODE_NAME"
-          relabel_configs:
-            - action: keep
-              regex: true|"true"
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-            - action: replace
-              regex: (https?)
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
-              target_label: __scheme__
-            - action: replace
-              regex: (.+)
-              source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-              target_label: __metrics_path__
-            - action: replace
-              regex: (.+?)(?::\d+)?;(\d+)
-              replacement: $$1:$$2
-              source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-              target_label: __address__
-            - action: labelmap
-              regex: __meta_kubernetes_pod_annotation_prometheus_io_param_(.+)
-              replacement: __param_$$1
-            - action: labelmap
-              regex: __meta_kubernetes_pod_label_(.+)
-            - action: replace
-              source_labels: [__meta_kubernetes_namespace]
-              target_label: namespace
-            - action: replace
-              source_labels: [__meta_kubernetes_pod_name]
-              target_label: pod
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              action: replace
-              target_label: kubernetes_node
-          metric_relabel_configs: []
-        - job_name: 'kubernetes-cadvisor'
-          scheme: https
-          metrics_path: /metrics/cadvisor
-          tls_config:
-            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-            insecure_skip_verify: true
-          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-          kubernetes_sd_configs:
-          - role: node
-            selectors:
-            # only scrape data from node with the same name as the node the collector run on
-            - role: node
-              field: "metadata.name=$KUBE_NODE_NAME"
-          relabel_configs:
-          - action: labelmap
-            regex: __meta_kubernetes_node_label_(.+)
-          metric_relabel_configs: []
-
   service:
     extensions:
       - health_check
     pipelines:
-      metrics:
+      metrics/infrastructure:
         exporters:
-          - prometheusremotewrite
+          - prometheusremotewrite/infrastructure
         processors:
           - attributes/env_id
           - filter/kubernetes360
         receivers:
-          - prometheus
+          - prometheus/infrastructure
+          - prometheus/cadvisor
+          - prometheus/collector
 
 opencost:
   enabled: false
@@ -942,8 +1015,64 @@ opencost:
             - 'IsMatch(metric.name, "(${OPENCOST_DUPLICATES})") == true and attributes["app"] == "opencost"'
     service:
       pipelines:
-        metrics:
+        metrics/infrastructure:
           processors:
             - filter/opencost-exporter
+
+prometheusFilters:
+  # Metrics names to be filtered
+  # All values should be listed with | seperator, as regex. i.e: metric_1|metric_2|metric_3
+  metrics:
+    # for infrastructure pipeline: metrics/infrastructure & metrics/cadvisor receivers
+    # (kubernetes-service-endpoints & cadvisor jobs)
+    infrastructure:
+      keep:
+        # need to also enable the flag: enableMetricsFilter.aks=true
+        aks: kube_daemonset_labels|kube_daemonset_status_number_ready|kube_daemonset_status_number_available|kube_daemonset_status_number_unavailable|kube_daemonset_status_current_number_scheduled|kube_daemonset_status_number_misscheduled|kube_daemonset_status_desired_number_scheduled|kube_job_labels|kube_job_complete|kube_job_status_failed|kube_job_status_succeeded|kube_job_complete|kube_job_status_failed|kube_job_status_completion_time|kube_replicaset_labels|kube_replicaset_spec_replicas|kube_replicaset_status_replicas|kube_replicaset_status_ready_replicas|kube_statefulset_replicas|kube_statefulset_status_replicas|kube_statefulset_status_replicas_updated|kube_statefulset_status_replicas_available|kube_pod_container_status_terminated_reason|kube_node_labels|kube_pod_container_status_waiting_reason|node_memory_Buffers_bytes|node_memory_Cached_bytes|kube_deployment_labels|container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|i:|kube_deployment_status_replicas|kube_deployment_status_replicas_available|kube_deployment_status_replicas_unavailable|kube_deployment_status_replicas_updated|kube_node_info|kube_node_spec_unschedulable|kube_node_status_allocatable|kube_node_status_capacity|kube_node_status_condition|kube_pod_container_info|kube_pod_container_resource_requests|kube_pod_container_resource_requests_cpu_cores|kube_pod_container_resource_requests_memory_bytes|kube_pod_container_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_status_running|kube_pod_container_status_terminated|kube_pod_container_status_waiting|kube_pod_info|kube_pod_status_phase|machine_cpu_cores|namespace|node_boot_time_seconds|node_cpu_seconds_total|node_disk_io_time_seconds_total|node_filesystem_avail_bytes|node_filesystem_free_bytes|node_filesystem_size_bytes|node_memory_MemFree_bytes|node_memory_MemTotal_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_time_seconds|p8s_logzio_name|windows_container_cpu_usage_seconds_total|windows_container_memory_usage_commit_bytes|windows_container_network_receive_bytes_total|windows_container_network_transmit_bytes_total|windows_cpu_time_total|windows_cs_hostname|windows_cs_physical_memory_bytes|windows_logical_disk_free_bytes|windows_logical_disk_read_seconds_total|windows_logical_disk_size_bytes|windows_logical_disk_write_seconds_total|windows_net_bytes_received_total|windows_net_bytes_sent_total|windows_os_physical_memory_free_bytes|windows_system_system_up_time|kube_pod_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_resource_limits|container_memory_usage_bytes|container_network_transmit_packets_total|container_network_receive_packets_total|container_network_transmit_packets_dropped_total|container_network_receive_packets_dropped_total|kube_pod_created|kube_pod_owner|kube_pod_status_reason|node_cpu_seconds_total|node_memory_MemAvailable_bytes|kube_node_role|kube_node_created|node_load1|node_load5|node_load15|node_disk_reads_completed_total|node_disk_writes_completed_total|node_disk_read_bytes_total|node_disk_written_bytes_total|node_disk_read_time_seconds_total|node_disk_write_time_seconds_total|node_network_transmit_packets_total|node_network_receive_packets_total|node_network_transmit_drop_total|node_network_receive_drop_total|kube_replicaset_owner|kube_deployment_created|kube_deployment_status_condition|kube_deployment_spec_replicas|kube_namespace_status_phase|kubelet_volume_stats_inodes|kubelet_volume_stats_inodes_used|kubelet_volume_stats_used_bytes|kube_persistentvolumeclaim_info|kube_persistentvolumeclaim_resource_requests_storage_bytes|kube_job_owner
+        # need to also enable the flag: enableMetricsFilter.eks=true
+        eks: kube_daemonset_labels|kube_daemonset_status_number_ready|kube_daemonset_status_number_available|kube_daemonset_status_number_unavailable|kube_daemonset_status_current_number_scheduled|kube_daemonset_status_number_misscheduled|kube_daemonset_status_desired_number_scheduled|kube_job_labels|kube_job_complete|kube_job_status_failed|kube_job_status_succeeded|kube_job_complete|kube_job_status_failed|kube_job_status_completion_time|kube_replicaset_labels|kube_replicaset_spec_replicas|kube_replicaset_status_replicas|kube_replicaset_status_ready_replicas|kube_statefulset_replicas|kube_statefulset_status_replicas|kube_statefulset_status_replicas_updated|kube_statefulset_status_replicas_available|kube_pod_container_status_terminated_reason|kube_node_labels|kube_pod_container_status_waiting_reason|node_memory_Buffers_bytes|node_memory_Cached_bytes|kube_deployment_labels|container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|kube_deployment_status_replicas|kube_deployment_status_replicas_available|kube_deployment_status_replicas_unavailable|kube_deployment_status_replicas_updated|kube_node_info|kube_node_spec_unschedulable|kube_node_status_allocatable|kube_node_status_capacity|kube_node_status_condition|kube_pod_container_resource_requests|kube_pod_container_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_status_running|kube_pod_container_status_terminated|kube_pod_container_status_waiting|kube_pod_info|kube_pod_status_phase|machine_cpu_cores|namespace|node_boot_time_seconds|node_cpu_seconds_total|node_disk_io_time_seconds_total|node_filesystem_avail_bytes|node_filesystem_free_bytes|node_filesystem_size_bytes|node_memory_MemFree_bytes|node_memory_MemTotal_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_time_seconds|p8s_logzio_name|kube_pod_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_resource_limits|container_memory_usage_bytes|container_network_transmit_packets_total|container_network_receive_packets_total|container_network_transmit_packets_dropped_total|container_network_receive_packets_dropped_total|kube_pod_created|kube_pod_owner|kube_pod_status_reason|node_cpu_seconds_total|node_memory_MemAvailable_bytes|kube_node_role|kube_node_created|node_load1|node_load5|node_load15|node_disk_reads_completed_total|node_disk_writes_completed_total|node_disk_read_bytes_total|node_disk_written_bytes_total|node_disk_read_time_seconds_total|node_disk_write_time_seconds_total|node_network_transmit_packets_total|node_network_receive_packets_total|node_network_transmit_drop_total|node_network_receive_drop_total|kube_replicaset_owner|kube_deployment_created|kube_deployment_status_condition|kube_deployment_spec_replicas|kube_namespace_status_phase|kubelet_volume_stats_inodes|kubelet_volume_stats_inodes_used|kubelet_volume_stats_used_bytes|kube_persistentvolumeclaim_info|kube_persistentvolumeclaim_resource_requests_storage_bytes|kube_job_owner
+        # need to also enable the flag: enableMetricsFilter.gke=true
+        gke: kube_daemonset_labels|kube_daemonset_status_number_ready|kube_daemonset_status_number_available|kube_daemonset_status_number_unavailable|kube_daemonset_status_current_number_scheduled|kube_daemonset_status_number_misscheduled|kube_daemonset_status_desired_number_scheduled|kube_job_labels|kube_job_complete|kube_job_status_failed|kube_job_status_succeeded|kube_job_complete|kube_job_status_failed|kube_job_status_completion_time|kube_replicaset_labels|kube_replicaset_spec_replicas|kube_replicaset_status_replicas|kube_replicaset_status_ready_replicas|kube_statefulset_replicas|kube_statefulset_status_replicas|kube_statefulset_status_replicas_updated|kube_statefulset_status_replicas_available|kube_pod_container_status_terminated_reason|kube_node_labels|kube_pod_container_status_waiting_reason|node_memory_Buffers_bytes|node_memory_Cached_bytes|kube_deployment_labels|container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_network_receive_bytes_total|container_network_transmit_bytes_total|kube_deployment_status_replicas|kube_deployment_status_replicas_available|kube_deployment_status_replicas_unavailable|kube_deployment_status_replicas_updated|kube_node_info|kube_node_spec_unschedulable|kube_node_status_allocatable|kube_node_status_capacity|kube_node_status_condition|kube_pod_container_resource_requests|kube_pod_container_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_status_running|kube_pod_container_status_terminated|kube_pod_container_status_waiting|kube_pod_info|kube_pod_status_phase|machine_cpu_cores|namespace|node_boot_time_seconds|node_cpu_seconds_total|node_disk_io_time_seconds_total|node_filesystem_avail_bytes|node_filesystem_free_bytes|node_filesystem_size_bytes|node_memory_MemFree_bytes|node_memory_MemTotal_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_time_seconds|p8s_logzio_name|kube_pod_status_ready|kube_pod_container_status_restarts_total|kube_pod_container_resource_limits|container_memory_usage_bytes|container_network_transmit_packets_total|container_network_receive_packets_total|container_network_transmit_packets_dropped_total|container_network_receive_packets_dropped_total|kube_pod_created|kube_pod_owner|kube_pod_status_reason|node_cpu_seconds_total|node_memory_MemAvailable_bytes|kube_node_role|kube_node_created|node_load1|node_load5|node_load15|node_disk_reads_completed_total|node_disk_writes_completed_total|node_disk_read_bytes_total|node_disk_written_bytes_total|node_disk_read_time_seconds_total|node_disk_write_time_seconds_total|node_network_transmit_packets_total|node_network_receive_packets_total|node_network_transmit_drop_total|node_network_receive_drop_total|kube_replicaset_owner|kube_deployment_created|kube_deployment_status_condition|kube_deployment_spec_replicas|kube_namespace_status_phase|kubelet_volume_stats_inodes|kubelet_volume_stats_inodes_used|kubelet_volume_stats_used_bytes|kube_persistentvolumeclaim_info|kube_persistentvolumeclaim_resource_requests_storage_bytes|kube_job_owner
+        custom:
+      drop:
+        custom:
+    # for applications pipeline: applications job
+    applications:
+      keep:
+        custom:
+      drop:
+        custom:
+
+  # Namespaces names to be filtered
+  # All values should be listed with | seperator, as regex. i.e: namespace_1|namespace_2|namespace_3
+  namespaces:
+    # for infrastructure pipeline: metrics/infrastructure & metrics/cadvisor receivers
+    # (kubernetes-service-endpoints & cadvisor jobs)
+    infrastructure:
+      keep:
+        custom:
+      drop:
+        kubeSystem: kube-system # need to also enable the flag: enableMetricsFilter.kubeSystem=true
+        custom:
+    # for applications pipeline: applications job
+    applications:
+      keep:
+        custom:
+      drop:
+        custom:
+
+  # Services names to filtered
+  # All values should be listed with | seperator, as regex. i.e: service_1|service_2|service_3
+  services:
+    # for infrastructure pipeline: metrics/infrastructure & metrics/cadvisor receivers
+    # (kubernetes-service-endpoints & cadvisor jobs)
+    infrastructure:
+      keep:
+        custom:
+      drop:
+        kubeDns: kube-dns # need to also enable the flag: disableKubeDnsScraping=true
+        custom:
+
+
 
 
